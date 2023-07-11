@@ -13,12 +13,18 @@ use std::{
     ffi::OsStr,
     fmt::Debug,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
+use ast::SourceRangeFactory;
 use cli::CompileParameters;
 use diagnostics::{Diagnostic, Diagnostician};
 use log::{debug, info};
-use plc::{lexer::IdProvider, output::FormatOption, DebugLevel, ErrorFormat, OptimizationLevel, Threads};
+use plc::{
+    lexer::{self, IdProvider},
+    output::FormatOption,
+    DebugLevel, ErrorFormat, OptimizationLevel, Threads,
+};
 use project::project::{LibraryInformation, Project};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use source_code::SourceContainer;
@@ -111,6 +117,50 @@ pub fn compile<T: AsRef<str> + AsRef<OsStr> + Debug>(args: &[T]) -> Result<(), D
         // Ignore the error here as the global threadpool might have been initialized
         info!("{err}")
     }
+
+    // let (unit, errors) = parse(lexer::lex_with_ids(source, id_provider, location_factory), linkage, location);
+    // let lexer = lexer::lex(source, id_provider, location_factory);
+    let _ = project
+        .get_sources()
+        .iter()
+        .map(|it| {
+            let mut avg: u128 = 0;
+            for _ in 0..10 {
+                let loaded_source = it
+                    .load_source(compile_parameters.encoding)
+                    .map_err(|err| {
+                        Diagnostic::io_read_error(
+                            &it.get_location().expect("Location should not be empty").to_string_lossy(),
+                            &err,
+                        )
+                    })
+                    .unwrap();
+
+                let mut lexer = lexer::lex_with_ids(
+                    &loaded_source.source,
+                    IdProvider::default(),
+                    SourceRangeFactory::internal(),
+                );
+
+                let mut count = 0;
+                let now = Instant::now();
+                while !lexer.is_end_of_stream() {
+                    lexer.advance();
+                }
+                avg += now.elapsed().as_micros();
+                println!(
+                    "Took {}us ({:?}; {:?}; {count})",
+                    now.elapsed().as_micros(),
+                    lexer.token,
+                    lexer.last_location()
+                );
+            }
+
+            println!("Average: {}us", avg / 10)
+        })
+        .collect::<Vec<_>>();
+
+    return Ok(());
 
     // 1 : Parse
     let annotated_project = pipelines::ParsedProject::parse(
